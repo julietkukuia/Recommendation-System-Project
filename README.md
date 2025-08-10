@@ -44,7 +44,7 @@ The dataset (from a real-world e-commerce site) contains:
 To follow the development journey of this project, check out the daily updates:
 
 - [Day 1 - Data Exploration & Setup](daily_logs/day1.md)
-- [Day 2 - Data Cleaning & Preprocessing](daily_logs/2025-08-11_progress.md)  
+- [Day 2 - Data Cleaning & Preprocessing](daily_logs/Day2.md)  
 *(More will be added as the project progresses)*
 
 ---
