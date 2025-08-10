@@ -83,5 +83,5 @@ Jupyter Notebook for iterative development and debugging.
 2. For large, messy datasets, forward-fill after chronological sort can be a safer alternative to merge_asof.
 3. Always verify per-group monotonic ordering before attempting time-aware joins.
 
-Author: [Your Name]
+Author: Juliet Fafali Kukuia
 Date: 10 Aug 2025
