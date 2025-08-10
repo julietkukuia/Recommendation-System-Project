@@ -26,14 +26,16 @@ The dataset (from a real-world e-commerce site) contains:
      - Used to group categories into higher-level clusters and compute category depth.
 
 ---
-
 ## 📂 Project Structure
-├── data/ # Raw and processed datasets
-├── notebooks/ # Jupyter notebooks for analysis and model building
-├── scripts/ # Python scripts for preprocessing and model training
-├── daily_logs/ # Daily work updates and progress reports
-├── README.md # Main project documentation
-└── requirements.txt # Dependencies
+
+| Folder/File          | Description |
+|----------------------|-------------|
+| `data/`              | Raw and processed datasets |
+| `notebooks/`         | Jupyter notebooks for analysis and model building |
+| `scripts/`           | Python scripts for preprocessing and model training |
+| `daily_logs/`        | Daily work updates and progress reports |
+| `README.md`          | Main project documentation |
+| `requirements.txt`   | List of project dependencies |
 
 
 ---
