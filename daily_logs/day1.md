@@ -1,87 +1,74 @@
-📌 **Project**
+# 🗓 Day 1 – Data Integration & Time-Aware Category Assignment
 
-**Personalised Recommendation System using E-commerce Behaviour Data
-Work Summary for Today**
-
----
-
-Today’s focus was on integrating the three key datasets:
-1. events.csv – user interactions (views, add-to-carts, transactions) with timestamps.
-2. item_properties_part1.csv and item_properties_part2.csv – historical item attributes (e.g., category, availability) with change timestamps.
-3. category_tree.csv – hierarchical category structure.
+**Date:** 2025-08-9  
+**Author:** Juliet Fafali Kukuia  
+**Project:** Personalised Recommendation System using E-commerce Behaviour Data  
 
 ---
 
-**Goals for the Day**
-- Load and combine large datasets without memory errors.
-- Extract and clean category mappings from item properties.
-- Merge event data with category information.
-- Implement time-aware category assignment using Pandas merge_asof or an equivalent method to prevent data leakage.
+## ✅ Tasks Completed
+- [x] Loaded and combined **item_properties_part1.csv** and **item_properties_part2.csv** in chunks to avoid memory errors.
+- [x] Extracted category mappings where `property == 'categoryid'`, renamed `value` → `categoryid`, and converted to integers.
+- [x] Merged **events.csv** with static category mapping for initial enrichment.
+- [x] Attempted time-aware category assignment using `pandas.merge_asof` with `by='itemid'` and `on='timestamp'`.
+- [x] Explored forward-fill alternative for assigning categories chronologically.
 
 ---
 
-**Steps Completed**
-
-1. Loaded item_properties in chunks to handle large file sizes efficiently:
-
-    chunks1 = pd.read_csv("item_properties_part1.csv", chunksize=1_000_000)
-    chunks2 = pd.read_csv("item_properties_part2.csv", chunksize=1_000_000)
-    item_props = pd.concat([chunk for chunk in chunks1] + [chunk for chunk in chunks2], ignore_index=True)
-
-2. Extracted category mapping:
-- Filtered rows where property == 'categoryid'
-- Renamed value → categoryid
-- Converted to integer type for consistency.
-
-3. Merged events with static category mapping for initial enrichment.
-   
-4. Attempted time-aware category assignment:
-- Goal: For each event, assign the most recent category at or before the event timestamp.
-- Used Pandas merge_asof with by='itemid' and on='timestamp'.
-- Encountered persistent ValueError: left keys must be sorted despite multiple sorting and cleaning attempts.
-
-5. Explored alternative forward-fill method:
-- Stacked events and category logs per item.
-- Sorted chronologically.
-- Forward-filled category values down the timeline.
-- Still in progress due to data irregularities.
+## 📊 Key Findings / Observations
+- The dataset is large and requires **chunk loading** for processing.
+- `merge_asof` failed due to **non-monotonic timestamps** within `itemid` groups.
+- Potential data quality issues include:
+  - Mixed timestamp formats (string, int).
+  - Duplicate timestamps for the same `itemid`.
+  - Missing `categoryid` values.
+- Forward-fill method could be more robust for messy data, but still requires cleanup.
 
 ---
 
-**Challenges Faced**
-
-- merge_asof strict sorting requirement: Data contains itemid groups with non-monotonic timestamps.
-- Hidden data issues such as:
-  - Mixed timestamp types (string, int).
-  - Duplicate timestamps for the same itemid.
-  - Potential missing category values.
-  - Large dataset size makes iterative debugging slower.
- 
----
-
-**Next Steps**
-
-1. Run a “bad itemid” diagnostic to identify and fix groups with out-of-order timestamps.
-2. Decide whether to:
-- Continue fixing data for merge_asof
-- Fully switch to the forward-fill timeline approach for robustness.
-3. Once category enrichment is stable:
-- Integrate category_tree.csv to map root categories and depth.
-- Build user and item feature matrices for model training.
+## ⚠️ Challenges & Fixes
+| Challenge | How It Was Resolved |
+|-----------|---------------------|
+| `merge_asof` error: "left keys must be sorted" | Applied multiple sorting attempts on `itemid` + `timestamp`; error persists. |
+| Large file size slowing debugging | Used **chunksize** in `read_csv` and concatenation to process in memory safely. |
+| Mixed timestamp types | Identified need to normalize timestamps before joins. |
 
 ---
 
-**Tools Used**
-
-Python: pandas for data loading, cleaning, and merging.
-Jupyter Notebook for iterative development and debugging.
+## 🔜 Next Steps
+- [ ] Run diagnostics to find `itemid` groups with out-of-order timestamps.
+- [ ] Decide between:
+  - Fixing dataset for `merge_asof`
+  - Switching fully to forward-fill approach for robustness.
+- [ ] Once category assignment is stable:
+  - Integrate **category_tree.csv** for root categories & depth.
+  - Build user and item feature matrices for model training.
 
 ---
 
-**Key Learnings**
-1. When working with historical property logs, time alignment is critical to avoid future-data leakage in recommender systems.
-2. For large, messy datasets, forward-fill after chronological sort can be a safer alternative to merge_asof.
-3. Always verify per-group monotonic ordering before attempting time-aware joins.
+## 📂 Files Updated / Created
+| File | Description |
+|------|-------------|
+| `notebooks/data_integration.ipynb` | Loaded and merged datasets, attempted time-aware join. |
+| `data/item_properties_part1.csv` | Source dataset (chunk processed). |
+| `data/item_properties_part2.csv` | Source dataset (chunk processed). |
+| `data/events.csv` | Source dataset for user interactions. |
 
-Author: Juliet Fafali Kukuia
-Date: 10 Aug 2025
+---
+
+## 🖼 Screenshots (if applicable)
+*(No screenshots for today — focus was on backend integration.)*
+
+---
+
+## 🔗 Related Links
+- [Main Project README](../README.md)
+
+---
+
+## 🧠 Key Learnings
+- Time-aware joins are sensitive to timestamp order; even slight disorder in grouped data can break merges.
+- Forward-fill after chronological sort is a viable backup for time alignment in recommender systems.
+- Always validate data per group before attempting joins to avoid silent errors.
+
+---
