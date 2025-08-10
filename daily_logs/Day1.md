@@ -56,7 +56,7 @@
 
 ---
 
-## 🖼 Screenshots (if applicable)
+## 🖼 Screenshots 
 *(No screenshots for today — focus was on backend integration.)*
 
 ---
