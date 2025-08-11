@@ -1,8 +1,8 @@
 📅 Day 2 – Outlier Removal, Category Enrichment & Sparse Matrix Creation
 
-**Date:** 2025-08-10
-**Author:** Juliet Fafali Kukuia
-**Project:** Personalised Recommendation System using E-commerce Behaviour Data
+**Date:** 2025-08-10  
+**Author:** Juliet Fafali Kukuia  
+**Project:** Personalised Recommendation System using E-commerce Behaviour Data  
 
 ---
 
