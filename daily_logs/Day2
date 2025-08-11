@@ -1,69 +1,88 @@
-# 🗓 Day 2 – Timestamp Diagnostics & Data Cleaning
+🗓 Day 2 – Outlier Removal, Category Enrichment & Sparse Matrix Creation
 
-**Date:** 2025-08-10  
-**Author:** Juliet Fafali Kukuia  
-**Project:** Personalised Recommendation System using E-commerce Behaviour Data  
+Date: 2025-08-10
+Author: Juliet Fafali Kukuia
+Project: Personalised Recommendation System using E-commerce Behaviour Data
+✅ Tasks Completed
 
----
+    Outlier Detection & Removal
 
-## ✅ Tasks Completed
-- [x] Investigated persistent `merge_asof` sorting errors by running per-`itemid` timestamp diagnostics.
-- [x] Identified groups with **non-monotonic** timestamps and duplicate entries.
-- [x] Normalized all timestamps to a consistent format (`datetime64[ns]`).
-- [x] Removed duplicate `(itemid, timestamp)` pairs to prevent merge conflicts.
-- [x] Re-sorted datasets (`events_sorted` and `cat_sorted`) using **stable mergesort** to preserve order.
-- [x] Began testing forward-fill approach for category assignment as a fallback method.
+        Calculated user and item activity quantiles.
 
----
+        Set thresholds: users >163 interactions and items >2302 interactions flagged as unrealistic.
 
-## 📊 Key Findings / Observations
-- Multiple `itemid` groups contained timestamps that were **out of order**, often caused by inconsistent data recording.
-- Some timestamps were stored as **strings** while others were UNIX integers — causing merge alignment issues.
-- Duplicates in `(itemid, timestamp)` pairs could cause data leakage in recommendations if not handled.
-- After cleaning, the number of affected rows was less than **5%** of total data, but enough to break `merge_asof`.
+        Dropped 1,472,348 rows (~25% of dataset) to reduce noise from bots/bulk buyers.
 
----
+    Category Missing Value Handling
 
-## ⚠️ Challenges & Fixes
-| Challenge | How It Was Resolved |
-|-----------|---------------------|
-| Mixed timestamp formats | Converted all to `pd.to_datetime` before merging. |
-| Duplicate `(itemid, timestamp)` rows | Dropped duplicates while keeping the first occurrence. |
-| Non-monotonic order within groups | Applied `sort_values(['itemid', 'timestamp'], kind='mergesort')`. |
+        Found 5.57% NaNs in categoryid.
 
----
+        Forward-filled category IDs within each itemid timeline to preserve chronological consistency.
 
-## 🔜 Next Steps
-- [ ] Retry `merge_asof` after final cleaning.
-- [ ] If issues persist, fully implement forward-fill time alignment method.
-- [ ] Integrate **category_tree.csv** for category hierarchy mapping.
-- [ ] Start initial exploratory data analysis (EDA) on enriched dataset.
+        Marked unknown categories for tracking.
 
----
+    Merging with Category Tree
 
-## 📂 Files Updated / Created
-| File | Description |
-|------|-------------|
-| `notebooks/data_cleaning.ipynb` | Added timestamp diagnostics and cleaning functions. |
-| `data/events_sorted.csv` | Cleaned & sorted events dataset. |
-| `data/cat_sorted.csv` | Cleaned & sorted category mapping dataset. |
+        Joined events_filtered with category_tree.csv.
 
----
+        Extracted parentid and category_depth for each category.
 
-## 🖼 Screenshots
-*(No visualisations yet — will add during EDA phase.)*
+        Resolved merge column conflicts (parentid_x, parentid_y) by renaming to a unified parentid.
 
----
+    Encoding & Sparse Matrix Preparation
 
-## 🔗 Related Links
-- [Main Project README](../README.md)
-- [Previous Day’s Log](day1.md)
+        Encoded visitorid → user_id and itemid → item_id using LabelEncoder.
 
----
+        Assigned event weights: view=1, addtocart=3, transaction=5.
 
-## 🧠 Key Learnings
-- Even a small percentage of unsorted keys can completely block time-aware joins.
-- Cleaning timestamp formats early prevents cascading merge errors.
-- Stable sorting (`mergesort`) is safer for large datasets where order matters.
+        Created a sparse CSR interaction matrix:
 
----
+            Shape: (1,376,968 users × 230,615 items)
+
+            Non-zero entries: 4,427,915 interactions
+
+            Saved as data/interaction_sparse.pkl for modelling.
+
+📊 Key Findings / Observations
+
+    Extreme outliers can heavily skew recommendations and memory usage.
+
+    Forward-fill method proved reliable for filling missing categoryid values in event timelines.
+
+    Sparse matrix storage reduced potential memory usage from ~2.5 TB (dense) to a manageable size.
+
+    A random preview of the interaction matrix confirms meaningful user–item connections.
+
+⚠️ Challenges & Fixes
+Challenge	How It Was Resolved
+Duplicate merge columns (parentid_x / parentid_y) after joining with category tree	Explicitly selected and renamed columns before merge.
+Memory errors when pivoting to dense format	Switched to CSR sparse matrix format using scipy.sparse.csr_matrix.
+Empty preview when sampling interactions	Adjusted sampling to ensure overlap between selected users and items.
+🔜 Next Steps
+
+    Conduct bonus EDA to strengthen final report:
+
+        Time-based trends – interaction patterns over time.
+
+        Category-level popularity – most purchased/engaged categories.
+
+        Repeat user behaviour – retention and purchase patterns.
+
+        Conversion funnel – view → add-to-cart → purchase rates.
+
+    Implement ALS recommender model using the sparse matrix.
+
+    Evaluate recommendation quality and diversity.
+
+📂 Files Updated / Created
+File	Description
+notebooks/data_cleaning_enrichment.ipynb	Outlier filtering, missing value handling, category enrichment.
+data/category_tree.csv	Category hierarchy data for enrichment.
+data/interaction_sparse.pkl	Sparse user–item interaction matrix for model training.
+🧠 Key Learnings
+
+    Outlier removal is a critical preprocessing step for scalable recommender systems.
+
+    Sparse matrices are essential for handling large-scale interaction data efficiently.
+
+    Careful handling of merge keys avoids data duplication or column conflicts.
