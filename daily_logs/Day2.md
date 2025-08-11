@@ -74,7 +74,7 @@
 
 | File                                       | Description                                                     |
 | ------------------------------------------ | --------------------------------------------------------------- |
-| `notebooks/data_cleaning_enrichment.ipynb` | Outlier filtering, missing value handling, category enrichment. |
+| `notebooks/Recommendation System Project.ipynb` | Outlier filtering, missing value handling, category enrichment. |
 | `data/category_tree.csv`                   | Category hierarchy data for enrichment.                         |
 | `data/interaction_sparse.pkl`              | Sparse user–item interaction matrix for model training.         |
 
