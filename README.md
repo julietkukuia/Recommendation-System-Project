@@ -55,6 +55,7 @@ To follow the development journey of this project, check out the daily updates:
 - **Matplotlib / Seaborn** for visualisation  
 - **Machine Learning** for recommendations
 - **GitHub** for version control & documentation
+- **Streamlit** for deployment
 
 ---
 
