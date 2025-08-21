@@ -7,6 +7,22 @@ from pathlib import Path
 from collections import Counter
 from typing import Optional
 
+# Write an updated Streamlit app that enriches predicted categories with parent category
+from pathlib import Path
+
+project_dir = Path.cwd()
+art = project_dir / "recsys_artifacts"
+assert art.exists(), f"recsys_artifacts not found in {project_dir}. Move your notebook into the project folder or move the folder here."
+
+app_code = r'''
+import streamlit as st
+import pandas as pd
+import numpy as np
+import json, joblib
+from pathlib import Path
+from collections import Counter
+from typing import Optional
+
 HERE = Path(__file__).resolve().parent
 ART = HERE / "recsys_artifacts"
 assert ART.exists(), f"Artifacts folder not found at {ART}"
@@ -38,6 +54,25 @@ def load_events_snapshot_default():
         p = ART / name
         if p.exists():
             return pd.read_parquet(p)
+    return None
+
+# ---- NEW: category tree loader so we can display the predicted property explicitly ----
+@st.cache_data
+def load_category_tree():
+    candidates = [
+        ART / "category_tree.csv",                # preferred location
+        Path("data/category_tree.csv"),           # common data folder
+        Path("category_tree.csv"),                # repo root fallback
+    ]
+    for p in candidates:
+        if p.exists():
+            df = pd.read_csv(p)
+            # normalize expected columns if names vary in case
+            cols = {c.lower(): c for c in df.columns}
+            cid = cols.get("categoryid","categoryid")
+            pid = cols.get("parentid","parentid")
+            if cid in df.columns and pid in df.columns:
+                return df.rename(columns={cid: "categoryid", pid: "parentid"})[["categoryid","parentid"]].drop_duplicates()
     return None
 
 def ensure_ts(ts):
@@ -98,6 +133,14 @@ def rank_with_model(cand: pd.DataFrame, k: int) -> pd.DataFrame:
     cand.insert(0, "rank", np.arange(1, len(cand) + 1))
     return cand[["rank","candidate_cat","score","source"]]
 
+def enrich_with_parent(out: pd.DataFrame) -> pd.DataFrame:
+    tree = load_category_tree()
+    if tree is None or out.empty:
+        return out
+    merged = out.merge(tree, left_on="candidate_cat", right_on="categoryid", how="left").drop(columns=["categoryid"])
+    cols = ["rank","candidate_cat","parentid","score","source"]
+    return merged[[c for c in cols if c in merged.columns]]
+
 def score_and_flag_users(user_feats: pd.DataFrame, share_override: Optional[float] = None) -> pd.DataFrame:
     iso, op = load_task2_model_and_op()
     feat_cols = op["feature_cols"]
@@ -118,11 +161,13 @@ with st.sidebar:
     st.write("Task 1 model:", TASK1_MODEL_FILE.exists())
     st.write("Task 2 model:", TASK2_MODEL_FILE.exists())
     st.write("Task 2 operating point:", TASK2_OP_FILE.exists())
+    tree = load_category_tree()
+    st.write("Category tree:", tree is not None)
 
-tab1, tab2 = st.tabs(["Task 1 Ranking", "Task 2 Anomaly Detection"])
+tab1, tab2 = st.tabs(["Task 1 Predict Property", "Task 2 Anomaly Detection"])
 
 with tab1:
-    st.subheader("Rank categories from recent views")
+    st.subheader("Predict next add to cart property  category  from recent views")
 
     left, right = st.columns([2, 1])
     with left:
@@ -142,10 +187,11 @@ with tab1:
                 }).dropna()
                 cand = candidates_from_views(views)
                 out = rank_with_model(cand, k)
-                st.success("Ranking computed")
+                out = enrich_with_parent(out)   # <-- NEW enrichment
+                st.success("Predicted properties computed")
                 st.dataframe(out, use_container_width=True)
                 st.download_button("Download CSV", out.to_csv(index=False).encode("utf-8"),
-                                   file_name="task1_ranking.csv", mime="text/csv")
+                                   file_name="task1_predicted_properties.csv", mime="text/csv")
             except Exception as e:
                 st.error(f"Could not compute ranking. {e}")
 
@@ -165,6 +211,7 @@ with tab1:
                     else pd.to_datetime(d["timestamp"])
                 )
                 out = rank_with_model(candidates_from_views(dfu[["ts","categoryid_final"]]), k=3)
+                out = enrich_with_parent(out)   # <-- NEW enrichment
                 st.dataframe(out, use_container_width=True)
 
 with tab2:
@@ -194,3 +241,21 @@ with tab2:
                                    file_name="task2_scored_users.csv", mime="text/csv")
             except Exception as e:
                 st.error(f"Scoring failed. {e}")
+'''
+
+reqs = """\
+streamlit==1.36.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+pyarrow==15.0.2
+joblib==1.3.2
+"""
+
+# write files
+(app_path := project_dir / "streamlit_app.py").write_text(app_code, encoding="utf-8")
+(req_path := project_dir / "requirements.txt").write_text(reqs, encoding="utf-8")
+
+print("Wrote:", app_path)
+print("Wrote:", req_path)
+print("Artifacts folder:", art)
