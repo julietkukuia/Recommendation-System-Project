@@ -103,6 +103,20 @@ To follow the development journey of this project, check out the daily updates:
 5. Final presentation slides
 
 ---
+## 🚀 Live Demo
+
+Try the deployed app on Streamlit Cloud:
+
+🔗 **App URL:**  
+https://recommendation-system-project-nqxms4rszkjgmwmk8eu6bv.streamlit.app/
+
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://recommendation-system-project-nqxms4rszkjgmwmk8eu6bv.streamlit.app/)
+
+**What you can do in the app**
+- **Task 1 – Ranking:** Enter recent category views to get top-k category recommendations.
+- **Task 2 – Anomaly Detection:** Upload the user features table (or use the default) to flag anomalous users at a chosen share or using the frozen operating point.
+
+---
 
 🧠 Key Learnings
 - Time-aware property alignment prevents future data leakage.
