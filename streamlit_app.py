@@ -1,12 +1,3 @@
-
-import streamlit as st
-import pandas as pd
-import numpy as np
-import json, joblib
-from pathlib import Path
-from collections import Counter
-from typing import Optional
-
 # Write an updated Streamlit app that enriches predicted categories with parent category
 from pathlib import Path
 
@@ -18,7 +9,7 @@ app_code = r'''
 import streamlit as st
 import pandas as pd
 import numpy as np
-import json, joblib
+import json, joblib, io
 from pathlib import Path
 from collections import Counter
 from typing import Optional
@@ -50,13 +41,14 @@ def load_user_feats_default():
 
 @st.cache_data
 def load_events_snapshot_default():
+    # prefer frozen, then q04, then general
     for name in ["events_clean_frozen.parquet","events_clean_q04.parquet","events_clean.parquet"]:
         p = ART / name
         if p.exists():
             return pd.read_parquet(p)
     return None
 
-# ---- NEW: category tree loader so we can display the predicted property explicitly ----
+# ---- category tree loader so we can display the predicted property explicitly ----
 @st.cache_data
 def load_category_tree():
     candidates = [
@@ -68,9 +60,9 @@ def load_category_tree():
         if p.exists():
             df = pd.read_csv(p)
             # normalize expected columns if names vary in case
-            cols = {c.lower(): c for c in df.columns}
-            cid = cols.get("categoryid","categoryid")
-            pid = cols.get("parentid","parentid")
+            cols_lower = {c.lower(): c for c in df.columns}
+            cid = cols_lower.get("categoryid") or "categoryid"
+            pid = cols_lower.get("parentid") or "parentid"
             if cid in df.columns and pid in df.columns:
                 return df.rename(columns={cid: "categoryid", pid: "parentid"})[["categoryid","parentid"]].drop_duplicates()
     return None
@@ -80,6 +72,44 @@ def ensure_ts(ts):
         return pd.to_datetime(int(ts), unit="ms")
     except Exception:
         return pd.to_datetime(ts)
+
+# ---- NEW: robust reader for uploaded events (parquet/csv) ----
+def read_events_file(file) -> pd.DataFrame | None:
+    try:
+        name = (getattr(file, "name", "") or "").lower()
+    except Exception:
+        name = ""
+    try:
+        if name.endswith((".parquet", ".parq")):
+            buf = io.BytesIO(file.read())
+            file.seek(0)
+            ev = pd.read_parquet(buf)
+        else:
+            # default to CSV if unknown/CSV
+            ev = pd.read_csv(file)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+        return None
+
+    # normalize required columns
+    if "categoryid_final" not in ev.columns:
+        if "categoryid" in ev.columns:
+            ev = ev.rename(columns={"categoryid":"categoryid_final"})
+        else:
+            st.error("Events need 'categoryid_final' (or 'categoryid').")
+            return None
+    if "timestamp" not in ev.columns:
+        for c in ["event_time","time","ts"]:
+            if c in ev.columns:
+                ev = ev.rename(columns={c:"timestamp"})
+                break
+    if "timestamp" not in ev.columns:
+        st.error("Events need a 'timestamp' column.")
+        return None
+    if "event" not in ev.columns:
+        st.error("Events need an 'event' column (view/addtocart/transaction).")
+        return None
+    return ev
 
 def candidates_from_views(view_df: pd.DataFrame) -> pd.DataFrame:
     if view_df.empty:
@@ -170,6 +200,8 @@ with tab1:
     st.subheader("Predict next add to cart property  category  from recent views")
 
     left, right = st.columns([2, 1])
+
+    # --------- Left: manual entry and ranking ----------
     with left:
         st.caption("Edit the table. Timestamp can be epoch ms or ISO string.")
         sample = pd.DataFrame({
@@ -187,32 +219,57 @@ with tab1:
                 }).dropna()
                 cand = candidates_from_views(views)
                 out = rank_with_model(cand, k)
-                out = enrich_with_parent(out)   # <-- NEW enrichment
+                out = enrich_with_parent(out)
                 st.success("Predicted properties computed")
                 st.dataframe(out, use_container_width=True)
-                st.download_button("Download CSV", out.to_csv(index=False).encode("utf-8"),
-                                   file_name="task1_predicted_properties.csv", mime="text/csv")
+                st.download_button(
+                    "Download CSV",
+                    out.to_csv(index=False).encode("utf-8"),
+                    file_name="task1_predicted_properties.csv",
+                    mime="text/csv",
+                )
             except Exception as e:
                 st.error(f"Could not compute ranking. {e}")
 
+    # --------- Right: upload events or fallback to local snapshot ----------
     with right:
-        st.caption("Quick demo using a cleaned events snapshot if present")
-        ev = load_events_snapshot_default()
-        if ev is None:
-            st.info("No events snapshot found in recsys_artifacts")
+        st.caption("Use your own events file (parquet/csv), or the local snapshot if present.")
+        uploaded_ev = st.file_uploader("Upload events (parquet/csv)", type=["parquet","csv"], key="ev_upl_task1")
+
+        if uploaded_ev is not None:
+            ev = read_events_file(uploaded_ev)
         else:
-            uids = ev["visitorid"].dropna().astype(int).unique()
-            uid = st.selectbox("Pick a visitor", options=sorted(uids)[:5000])
-            dfu = ev.loc[(ev["visitorid"] == uid) & (ev["event"] == "view"), ["timestamp","categoryid_final"]]
-            if not dfu.empty:
-                dfu = dfu.assign(
-                    ts=lambda d: pd.to_datetime(d["timestamp"], unit="ms")
-                    if np.issubdtype(d["timestamp"].dtype, np.number)
-                    else pd.to_datetime(d["timestamp"])
-                )
-                out = rank_with_model(candidates_from_views(dfu[["ts","categoryid_final"]]), k=3)
-                out = enrich_with_parent(out)   # <-- NEW enrichment
-                st.dataframe(out, use_container_width=True)
+            ev = load_events_snapshot_default()
+
+        if ev is None:
+            st.info("No events snapshot found and no file uploaded.")
+        else:
+            try:
+                uids = ev["visitorid"].dropna().astype(int).unique()
+                if len(uids) == 0:
+                    st.info("No visitor IDs found in events.")
+                else:
+                    uid = st.selectbox("Pick a visitor", options=sorted(uids)[:5000])
+                    dfu = ev.loc[
+                        (ev["visitorid"] == uid) & (ev["event"] == "view"),
+                        ["timestamp","categoryid_final"]
+                    ]
+                    if dfu.empty:
+                        st.info("Selected user has no view events in this file.")
+                    else:
+                        dfu = dfu.assign(
+                            ts=lambda d: pd.to_datetime(d["timestamp"], unit="ms")
+                            if np.issubdtype(d["timestamp"].dtype, np.number)
+                            else pd.to_datetime(d["timestamp"])
+                        )
+                        out = rank_with_model(
+                            candidates_from_views(dfu[["ts","categoryid_final"]]),
+                            k=3
+                        )
+                        out = enrich_with_parent(out)
+                        st.dataframe(out, use_container_width=True)
+            except Exception as e:
+                st.error(f"Demo failed: {e}")
 
 with tab2:
     st.subheader("Flag anomalous users")
