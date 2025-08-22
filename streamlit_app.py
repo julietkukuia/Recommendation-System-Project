@@ -7,34 +7,73 @@ from pathlib import Path
 from collections import Counter, defaultdict
 from typing import Optional, List
 
-# ---------- paths that work both locally and on streamlit cloud ----------
-HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
-ART = HERE / "recsys_artifacts"
-assert ART.exists(), f"Artifacts folder not found at {ART}"
+# =========================================================
+# ================ UTILITIES / NORMALISERS ================
+# =========================================================
 
-# ---------- artifacts expected ----------
-# task 1a: category-from-views ranker (logistic regression)
-TASK1_MODEL_FILE = ART / "task1_ranking_best_logistic_regression.joblib"
-# task 1b: next-item recommender (covisitation)
-COVIS_FILE = ART / "task1_next_item_covis.parquet"
-SEEN_FILE  = ART / "task1_seen_items.parquet"
-# optional events snapshots (cleaned)
-SNAPSHOT_FILES = [
-    ART / "events_clean_frozen.parquet",
-    ART / "events_clean_q04.parquet",
-    ART / "events_clean.parquet",
-]
-# task 2: anomaly detection
-TASK2_MODEL_FILE = ART / "task2_isolation_forest.joblib"
-TASK2_OP_FILE    = ART / "task2_operating_point.json"
+def normalize_events(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a frame with columns: visitorid(int64), itemid(int64), ts(datetime).
+    Accepts common alternative column names and handles ms-epoch or ISO timestamps.
+    """
+    rename_map = {}
+    cols_lower = {c.lower(): c for c in df.columns}
+    if "visitorid" not in df.columns and "visitor_id" in cols_lower:
+        rename_map[cols_lower["visitor_id"]] = "visitorid"
+    if "itemid" not in df.columns and "item_id" in cols_lower:
+        rename_map[cols_lower["item_id"]] = "itemid"
+    if "timestamp" not in df.columns and "time" in cols_lower:
+        rename_map[cols_lower["time"]] = "timestamp"
+    if rename_map:
+        df = df.rename(columns=rename_map)
 
-# ---------- shared utils ----------
+    need = {"visitorid", "itemid", "timestamp"}
+    missing = need - set(df.columns)
+    if missing:
+        raise ValueError(f"Events file must contain columns {need}. Missing: {missing}")
+
+    out = df.copy()
+
+    # Parse timestamp (ms epoch or ISO)
+    ts = out["timestamp"]
+    if np.issubdtype(ts.dtype, np.number):
+        out["ts"] = pd.to_datetime(ts, unit="ms", errors="coerce")
+    else:
+        out["ts"] = pd.to_datetime(ts, errors="coerce")
+
+    # Coerce ids to numeric, drop bad rows
+    out["visitorid"] = pd.to_numeric(out["visitorid"], errors="coerce")
+    out["itemid"]    = pd.to_numeric(out["itemid"],    errors="coerce")
+    out = out.dropna(subset=["visitorid", "itemid", "ts"]).copy()
+
+    # Unify dtypes to match co-vis tables
+    out["visitorid"] = out["visitorid"].astype("int64")
+    out["itemid"]    = out["itemid"].astype("int64")
+
+    # Sort
+    out = out.sort_values(["visitorid", "ts"]).reset_index(drop=True)
+    return out
+
+
+def suggest_visitors_with_neighbors(ev_norm: pd.DataFrame, covis: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
+    """Return visitor IDs whose last item exists in the co-vis table (so recs will work)."""
+    last_item = (
+        ev_norm.groupby("visitorid", as_index=False)
+               .tail(1)[["visitorid", "itemid"]]
+               .rename(columns={"itemid": "last_item"})
+    )
+    items_with_neighbors = set(covis["itemid"].unique())
+    good = last_item[last_item["last_item"].isin(items_with_neighbors)].copy()
+    return good.head(top_n)
+
+
 def ensure_ts_series(ts_like):
-    """parse ms epoch or ISO string to pandas.Timestamp"""
+    """Parse ms-epoch or ISO string to pandas.Timestamp."""
     try:
         return pd.to_datetime(int(ts_like), unit="ms")
     except Exception:
         return pd.to_datetime(ts_like)
+
 
 def ensure_ts_df(df: pd.DataFrame, col="timestamp") -> pd.DataFrame:
     out = df.copy()
@@ -44,36 +83,108 @@ def ensure_ts_df(df: pd.DataFrame, col="timestamp") -> pd.DataFrame:
         out["ts"] = pd.to_datetime(out[col], errors="coerce")
     return out
 
+
+# =========================================================
+# ================= PATHS & ARTIFACTS =====================
+# =========================================================
+
+HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+ART = HERE / "recsys_artifacts"
+assert ART.exists(), f"Artifacts folder not found at {ART}"
+
+# Task 1A: category-from-views ranker (logistic regression)
+TASK1_MODEL_FILE = ART / "task1_ranking_best_logistic_regression.joblib"
+
+# Task 1B: next-item recommender (co-visitation artifacts)
+COVIS_FILE = ART / "task1_next_item_covis.parquet"
+SEEN_FILE  = ART / "task1_seen_items.parquet"
+
+# Optional cleaned snapshots (for deriving last items quickly)
+SNAPSHOT_FILES = [
+    ART / "events_clean_frozen.parquet",
+    ART / "events_clean_q04.parquet",
+    ART / "events_clean.parquet",
+]
+
+# Task 2: anomaly detection
+TASK2_MODEL_FILE = ART / "task2_isolation_forest.joblib"
+TASK2_OP_FILE    = ART / "task2_operating_point.json"
+
+# =========================================================
+# ===================== LOADERS (cached) ==================
+# =========================================================
+
 @st.cache_data
 def load_snapshot_default() -> Optional[pd.DataFrame]:
     for p in SNAPSHOT_FILES:
         if p.exists():
-            return pd.read_parquet(p)
+            df = pd.read_parquet(p)
+            keep = [c for c in ["timestamp", "visitorid", "itemid"] if c in df.columns]
+            if not keep:
+                return None
+            return normalize_events(df[keep])
     return None
 
-# =========================================================
-# =============  PANEL A: Next-Item Recommender ===========
-# =========================================================
 
 @st.cache_data
 def load_covis_and_seen():
     covis, seen = None, None
     if COVIS_FILE.exists():
-        covis = pd.read_parquet(COVIS_FILE)
-        covis = covis.astype({"itemid":"int64","neighbor":"int64","score":"float32"})
+        covis = pd.read_parquet(COVIS_FILE).astype({"itemid": "int64", "neighbor": "int64", "score": "float32"})
     if SEEN_FILE.exists():
-        seen = pd.read_parquet(SEEN_FILE)
-        # seen schema: visitorid | seen_items(list[int])
+        seen = pd.read_parquet(SEEN_FILE)  # visitorid | seen_items(list[int])
     return covis, seen
 
-def last_k_items_for_user(ev: pd.DataFrame, user_id: int, k: int = 3) -> List[int]:
-    if ev is None or ev.empty:
+
+@st.cache_resource
+def load_task1_model():
+    if TASK1_MODEL_FILE.exists():
+        return joblib.load(TASK1_MODEL_FILE)
+    return None
+
+
+@st.cache_data
+def load_category_tree():
+    candidates = [
+        ART / "category_tree.csv",
+        HERE / "data/category_tree.csv",
+        HERE / "category_tree.csv",
+    ]
+    for p in candidates:
+        if p.exists():
+            df = pd.read_csv(p)
+            cols = {c.lower(): c for c in df.columns}
+            cid = cols.get("categoryid", "categoryid")
+            pid = cols.get("parentid", "parentid")
+            if cid in df.columns and pid in df.columns:
+                return (df.rename(columns={cid: "categoryid", pid: "parentid"})
+                          [["categoryid", "parentid"]]
+                          .drop_duplicates())
+    return None
+
+
+@st.cache_resource
+def load_task2_model_and_op():
+    if TASK2_MODEL_FILE.exists() and TASK2_OP_FILE.exists():
+        iso = joblib.load(TASK2_MODEL_FILE)
+        op  = json.load(open(TASK2_OP_FILE))
+        return iso, op
+    return None, None
+
+
+# =========================================================
+# ============= NEXT-ITEM RECOMMENDER (co-vis) ============
+# =========================================================
+
+def last_k_items_for_user(ev_norm: pd.DataFrame, user_id: int, k: int = 3) -> List[int]:
+    if ev_norm is None or ev_norm.empty:
         return []
-    sub = ev.loc[ev["visitorid"] == user_id, ["timestamp","itemid"]]
+    sub = ev_norm.loc[ev_norm["visitorid"] == user_id, ["ts", "itemid"]]
     if sub.empty:
         return []
-    sub = ensure_ts_df(sub).sort_values("ts")
+    sub = sub.sort_values("ts")
     return list(pd.unique(sub["itemid"].astype("int64").tail(k)))[::-1]  # most-recent-first
+
 
 def recommend_from_covis(covis: pd.DataFrame,
                          last_items: List[int],
@@ -84,7 +195,7 @@ def recommend_from_covis(covis: pd.DataFrame,
     Falls back to global popularity from COVIS if last_items is empty.
     """
     if covis is None or covis.empty:
-        return pd.DataFrame(columns=["rank","itemid","score"])
+        return pd.DataFrame(columns=["rank", "itemid", "score"])
 
     if exclude is None:
         exclude = set()
@@ -96,8 +207,8 @@ def recommend_from_covis(covis: pd.DataFrame,
                      .sort_values("score", ascending=False))
         pop = pop.loc[~pop["neighbor"].isin(exclude)].head(k).reset_index(drop=True)
         pop.insert(0, "rank", np.arange(1, len(pop)+1))
-        pop = pop.rename(columns={"neighbor":"itemid"})
-        return pop[["rank","itemid","score"]]
+        pop = pop.rename(columns={"neighbor": "itemid"})
+        return pop[["rank", "itemid", "score"]]
 
     # recency weights (most recent gets weight 1.0)
     recency = np.linspace(1.0, 0.6, num=len(last_items))
@@ -105,7 +216,7 @@ def recommend_from_covis(covis: pd.DataFrame,
 
     # accumulate neighbor scores
     for r_w, it in zip(recency, last_items):
-        neigh = covis.loc[covis["itemid"] == int(it), ["neighbor","score"]]
+        neigh = covis.loc[covis["itemid"] == int(it), ["neighbor", "score"]]
         for n, s in neigh.itertuples(index=False):
             if n in exclude or n in last_items:
                 continue
@@ -119,38 +230,14 @@ def recommend_from_covis(covis: pd.DataFrame,
               .head(k)
               .reset_index(drop=True))
     recs.insert(0, "rank", np.arange(1, len(recs)+1))
-    return recs[["rank","itemid","score"]]
+    return recs[["rank", "itemid", "score"]]
+
 
 # =========================================================
-# ==========  PANEL B: Property-from-Views (Task 1A) ======
+# ====== TASK 1A: PREDICT CATEGORY FROM RECENT VIEWS ======
 # =========================================================
 
 TASK1_FEATURES = ["cnt","share","is_last","last_gap_min","pos_from_end","tail_streak_if_last","n_views"]
-
-@st.cache_resource
-def load_task1_model():
-    if TASK1_MODEL_FILE.exists():
-        return joblib.load(TASK1_MODEL_FILE)
-    return None
-
-@st.cache_data
-def load_category_tree():
-    candidates = [
-        ART / "category_tree.csv",
-        HERE / "data/category_tree.csv",
-        HERE / "category_tree.csv",
-    ]
-    for p in candidates:
-        if p.exists():
-            df = pd.read_csv(p)
-            cols = {c.lower(): c for c in df.columns}
-            cid = cols.get("categoryid","categoryid")
-            pid = cols.get("parentid","parentid")
-            if cid in df.columns and pid in df.columns:
-                return (df.rename(columns={cid:"categoryid", pid:"parentid"})
-                          [["categoryid","parentid"]]
-                          .drop_duplicates())
-    return None
 
 def candidates_from_views(view_df: pd.DataFrame) -> pd.DataFrame:
     if view_df.empty:
@@ -189,12 +276,12 @@ def candidates_from_views(view_df: pd.DataFrame) -> pd.DataFrame:
         })
     return pd.DataFrame(rows)
 
+
 def rank_with_model(cand: pd.DataFrame, k: int):
     if cand.empty:
         return cand
     mdl = load_task1_model()
     if mdl is None:
-        # fallback to simple rule if model not shipped
         cand["score"] = cand["cnt"] + 0.5 * (1.0 / (1.0 + cand["last_gap_min"]))
         cand["source"] = "rule"
     else:
@@ -208,27 +295,21 @@ def rank_with_model(cand: pd.DataFrame, k: int):
             cand["source"] = "rule"
     cand = cand.sort_values("score", ascending=False).head(k).reset_index(drop=True)
     cand.insert(0, "rank", np.arange(1, len(cand) + 1))
-    return cand[["rank","candidate_cat","score","source"]]
+    return cand[["rank", "candidate_cat", "score", "source"]]
+
 
 def enrich_with_parent(out: pd.DataFrame) -> pd.DataFrame:
     tree = load_category_tree()
     if tree is None or out.empty:
         return out
     merged = out.merge(tree, left_on="candidate_cat", right_on="categoryid", how="left").drop(columns=["categoryid"])
-    cols = ["rank","candidate_cat","parentid","score","source"]
+    cols = ["rank", "candidate_cat", "parentid", "score", "source"]
     return merged[[c for c in cols if c in merged.columns]]
 
-# =========================================================
-# ==============  PANEL C: Anomaly Detection  =============
-# =========================================================
 
-@st.cache_resource
-def load_task2_model_and_op():
-    if TASK2_MODEL_FILE.exists() and TASK2_OP_FILE.exists():
-        iso = joblib.load(TASK2_MODEL_FILE)
-        op  = json.load(open(TASK2_OP_FILE))
-        return iso, op
-    return None, None
+# =========================================================
+# =============== TASK 2: ANOMALY DETECTION ===============
+# =========================================================
 
 def score_and_flag_users(user_feats: pd.DataFrame, share_override: Optional[float] = None) -> pd.DataFrame:
     iso, op = load_task2_model_and_op()
@@ -244,8 +325,9 @@ def score_and_flag_users(user_feats: pd.DataFrame, share_override: Optional[floa
     out["threshold_used"] = thr
     return out
 
+
 # =========================================================
-# ========================   UI   =========================
+# ========================= UI ============================
 # =========================================================
 
 st.set_page_config(page_title="Recsys Inference", layout="wide")
@@ -264,65 +346,86 @@ tabA, tabB, tabC = st.tabs(["Next-Item Recommender", "Predict Category from View
 # ---------- Tab A: Next-Item ----------
 with tabA:
     st.subheader("Recommend next items from recent activity (co-visitation)")
-    covis, seen_tbl = load_covis_and_seen()
-    ev = load_snapshot_default()
+    covis_df, seen_tbl = load_covis_and_seen()
+    if covis_df is None or covis_df.empty:
+        st.warning("Co-visitation table not found. Please ship `task1_next_item_covis.parquet` in `recsys_artifacts`.")
+    else:
+        # Load snapshot by default (normalized)
+        ev_used = load_snapshot_default()
 
-    # input options
-    col1, col2 = st.columns([1,1])
-    with col1:
-        uid = st.number_input("Visitor ID", min_value=0, value=0, step=1, help="Enter a known visitorid from your dataset")
-        k = st.number_input("Top-K items", min_value=1, max_value=50, value=8, step=1)
-        use_events = st.checkbox("Use cleaned events snapshot to derive last items", value=True)
-        exclude_seen = st.checkbox("Exclude already seen items", value=True)
-    with col2:
-        st.caption("Optional: Upload an events file (csv or parquet) if you want to test with fresh data")
-        uploaded = st.file_uploader("Upload events", type=["csv","parquet"])
-        if uploaded is not None:
-            ev = pd.read_parquet(uploaded) if uploaded.name.endswith(".parquet") else pd.read_csv(uploaded)
+        # Controls
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            uid = st.number_input("Visitor ID", min_value=0, value=0, step=1, help="Enter a known visitorid from your dataset")
+            k = st.number_input("Top-K items", min_value=1, max_value=50, value=8, step=1)
+            use_events = st.checkbox("Use cleaned events snapshot to derive last items", value=True)
+            exclude_seen = st.checkbox("Exclude already seen items", value=True)
+        with col2:
+            st.caption("Optional: Upload an events file (CSV or PARQUET) to test with fresh data")
+            uploaded = st.file_uploader("Upload events", type=["csv", "parquet"])
+            if uploaded is not None:
+                try:
+                    raw = pd.read_parquet(uploaded) if uploaded.name.lower().endswith(".parquet") else pd.read_csv(uploaded, low_memory=False)
+                    ev_used = normalize_events(raw)
+                except Exception as e:
+                    st.error(f"Could not parse uploaded events: {e}")
+                    ev_used = None
 
-    # determine last items
-    last_items = []
-    if use_events and ev is not None:
-        required_cols = {"visitorid","itemid","timestamp"}
-        if required_cols.issubset(set(ev.columns)):
-            last_items = last_k_items_for_user(ev, int(uid), k=3)
-    # otherwise leave last_items empty and fall back to popularity in covis
+        # Determine last items (most recent first)
+        last_items = []
+        if use_events and ev_used is not None and not ev_used.empty:
+            last_items = last_k_items_for_user(ev_used, int(uid), k=3)
 
-    # exclusion set
-    exclude_set = set()
-    if exclude_seen and seen_tbl is not None and "seen_items" in seen_tbl.columns:
-        row = seen_tbl.loc[seen_tbl["visitorid"] == int(uid)]
-        if not row.empty:
+        # Exclusion set
+        exclude_set = set()
+        if exclude_seen and seen_tbl is not None and "seen_items" in seen_tbl.columns:
+            row = seen_tbl.loc[seen_tbl["visitorid"] == int(uid)]
+            if not row.empty:
+                try:
+                    vals = row.iloc[0]["seen_items"]
+                    if isinstance(vals, str):
+                        import ast
+                        vals = ast.literal_eval(vals)
+                    exclude_set = set(int(x) for x in vals)
+                except Exception:
+                    exclude_set = set()
+
+        if st.button("Recommend"):
             try:
-                # seen_items stored as list; if serialized as string, try to eval safely
-                vals = row.iloc[0]["seen_items"]
-                if isinstance(vals, str):
-                    import ast
-                    vals = ast.literal_eval(vals)
-                exclude_set = set(int(x) for x in vals)
-            except Exception:
-                exclude_set = set()
+                recs = recommend_from_covis(covis_df, last_items=last_items, k=int(k), exclude=exclude_set)
+                if last_items:
+                    st.write(f"Last items used (most-recent-first): {last_items}")
+                else:
+                    st.write("No last items found for this user — falling back to global popularity from co-visitation.")
 
-    if st.button("Recommend"):
-        try:
-            recs = recommend_from_covis(covis, last_items=last_items, k=int(k), exclude=exclude_set)
-            if last_items:
-                st.write(f"Last items used (most-recent-first): {last_items}")
-            else:
-                st.write("No last items found for this user — falling back to global popularity from co-visitation.")
+                if recs.empty:
+                    st.warning("No recommendations could be produced. Make sure your co-visitation table has neighbors.")
+                else:
+                    st.dataframe(recs, use_container_width=True)
+                    st.download_button(
+                        "Download recommendations CSV",
+                        recs.to_csv(index=False).encode("utf-8"),
+                        file_name=f"next_item_recs_user_{uid}.csv",
+                        mime="text/csv",
+                    )
+            except Exception as e:
+                st.error(f"Recommendation failed: {e}")
 
-            if recs.empty:
-                st.warning("No recommendations could be produced. Make sure your co-visitation table has neighbors.")
+        with st.expander("Diagnostics", expanded=True):
+            st.write("Co-vis rows:", len(covis_df))
+            if ev_used is not None and not ev_used.empty:
+                st.write("Events rows:", len(ev_used))
+                try:
+                    sug = suggest_visitors_with_neighbors(ev_used, covis_df, top_n=30)
+                    if not sug.empty:
+                        st.write("Suggested visitor IDs (their last item has neighbors):")
+                        st.dataframe(sug, use_container_width=True)
+                    else:
+                        st.write("No suggested visitors found. Try a different events sample.")
+                except Exception as e:
+                    st.write(f"Suggestion check failed: {e}")
             else:
-                st.dataframe(recs, use_container_width=True)
-                st.download_button(
-                    "Download recommendations CSV",
-                    recs.to_csv(index=False).encode("utf-8"),
-                    file_name=f"next_item_recs_user_{uid}.csv",
-                    mime="text/csv",
-                )
-        except Exception as e:
-            st.error(f"Recommendation failed: {e}")
+                st.info("No events loaded (upload a file or enable snapshot).")
 
 # ---------- Tab B: Predict Category / Property from Views ----------
 with tabB:
@@ -359,19 +462,15 @@ with tabB:
     with right:
         st.caption("Or pick a visitor from your cleaned snapshot (if present).")
         ev_snap = load_snapshot_default()
-        if ev_snap is None or ev_snap.empty or "categoryid_final" not in ev_snap.columns:
-            st.info("No events snapshot found (or missing categoryid_final).")
+        if ev_snap is None or ev_snap.empty:
+            st.info("No events snapshot found (or snapshot missing required columns).")
         else:
             uids = ev_snap["visitorid"].dropna().astype(int).unique()
             try:
                 pick_uid = st.selectbox("Visitor", options=sorted(uids)[:5000])
-                dfu = ev_snap.loc[(ev_snap["visitorid"] == pick_uid) & (ev_snap["event"] == "view"), ["timestamp","categoryid_final"]]
-                if not dfu.empty:
-                    dfu = ensure_ts_df(dfu)
-                    cand = candidates_from_views(dfu[["ts","categoryid_final"]])
-                    out = rank_with_model(cand, k=3)
-                    out = enrich_with_parent(out)
-                    st.dataframe(out, use_container_width=True)
+                dfu = ev_snap.loc[ev_snap["visitorid"] == pick_uid, ["ts","itemid"]]
+                st.write("Snapshot loaded for this visitor (first 10 rows):")
+                st.dataframe(dfu.head(10), use_container_width=True)
             except Exception:
                 pass
 
@@ -382,7 +481,6 @@ with tabC:
     if uploaded_feats is not None:
         user_feats = pd.read_parquet(uploaded_feats) if uploaded_feats.name.endswith(".parquet") else pd.read_csv(uploaded_feats)
     else:
-        # try default features (if you shipped them)
         default_feats = ART / "task2_user_features.parquet"
         user_feats = pd.read_parquet(default_feats) if default_feats.exists() else None
 
