@@ -1,58 +1,3 @@
-# --- Robust normalizer for uploaded / snapshot events ---
-def normalize_events(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a frame with columns: visitorid(int64), itemid(int64), ts(datetime)"""
-    # Accept common alternative names
-    rename_map = {}
-    cols_lower = {c.lower(): c for c in df.columns}
-    if "visitorid" not in df.columns and "visitor_id" in cols_lower:
-        rename_map[cols_lower["visitor_id"]] = "visitorid"
-    if "itemid" not in df.columns and "item_id" in cols_lower:
-        rename_map[cols_lower["item_id"]] = "itemid"
-    if "timestamp" not in df.columns and "time" in cols_lower:
-        rename_map[cols_lower["time"]] = "timestamp"
-    if rename_map:
-        df = df.rename(columns=rename_map)
-
-    need = {"visitorid","itemid","timestamp"}
-    missing = need - set(df.columns)
-    if missing:
-        raise ValueError(f"Events file must contain columns {need}. Missing: {missing}")
-
-    out = df.copy()
-
-    # Parse timestamp (ms epoch or ISO)
-    ts = out["timestamp"]
-    if np.issubdtype(ts.dtype, np.number):
-        out["ts"] = pd.to_datetime(ts, unit="ms", errors="coerce")
-    else:
-        out["ts"] = pd.to_datetime(ts, errors="coerce")
-
-    # Coerce ids to numeric, drop bad rows
-    out["visitorid"] = pd.to_numeric(out["visitorid"], errors="coerce")
-    out["itemid"]    = pd.to_numeric(out["itemid"],    errors="coerce")
-    out = out.dropna(subset=["visitorid","itemid","ts"]).copy()
-
-    # Unify dtypes to match co-vis table
-    out["visitorid"] = out["visitorid"].astype("int64")
-    out["itemid"]    = out["itemid"].astype("int64")
-
-    # Sort
-    out = out.sort_values(["visitorid","ts"]).reset_index(drop=True)
-    return out
-
-def suggest_visitors_with_neighbors(ev_norm: pd.DataFrame, covis: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
-    """Return visitor IDs whose last item exists in the co-vis table (so recs will work)."""
-    # visitors and their last item
-    last_item = (
-        ev_norm.groupby("visitorid", as_index=False)
-               .tail(1)[["visitorid","itemid"]]
-               .rename(columns={"itemid":"last_item"})
-    )
-    # which last items have neighbors
-    items_with_neighbors = set(covis["itemid"].unique())
-    good = last_item[last_item["last_item"].isin(items_with_neighbors)].copy()
-    return good.head(top_n)
-
 # streamlit_app.py
 import streamlit as st
 import pandas as pd
@@ -462,4 +407,5 @@ with tabC:
                                    mime="text/csv")
             except Exception as e:
                 st.error(f"Scoring failed: {e}")
+
 
