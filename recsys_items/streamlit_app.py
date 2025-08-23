@@ -8,20 +8,26 @@ from collections import Counter
 import glob
 
 # ------------------ cached artefact loaders ------------------
-@st.cache_resource
-def load_model_and_meta():
-    model = joblib.load("best_candidate_ranker.pkl")
-    with open("inference_metadata.json") as f:
-        meta = json.load(f)
-    return model, meta
-
 @st.cache_data
 def load_embeddings():
-    U = pd.read_parquet("svd_user_factors.parquet")
-    V = pd.read_parquet("svd_item_factors.parquet")
-    U["visitorid"] = U["visitorid"].astype("int64")
+    import glob, os
+    import pandas as pd
+    # item factors (as before)
+    V_path = "svd_item_factors.parquet"
+    if not os.path.exists(V_path):
+        V_path = "recsys_items/svd_item_factors.parquet"
+    V = pd.read_parquet(V_path)
     V["candidate_cat"] = V["candidate_cat"].astype("int64")
+
+    # user factors from shards
+    shard_paths = sorted(glob.glob("recsys_items/svd_user_factors_part*.parquet"))
+    U = pd.concat([pd.read_parquet(p) for p in shard_paths], ignore_index=True)
+    U["visitorid"] = U["visitorid"].astype("int64")
+    svd_u_cols = [c for c in U.columns if c.startswith("svd_u_")]
+    U[svd_u_cols] = U[svd_u_cols].astype("float32")   # <<< upcast for model
+
     return U, V
+
 
 @st.cache_data
 def load_events_from_csv(file) -> pd.DataFrame:
@@ -243,3 +249,4 @@ else:
             recs = score_candidates(cand, model, META, U, V, topk=topk)
             st.subheader("Top K Categories")
             st.dataframe(recs, use_container_width=True)
+
