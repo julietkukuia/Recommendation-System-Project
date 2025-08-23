@@ -175,7 +175,9 @@ Business Understanding
 ## 🚀 Live Demo
 
 Try the deployed app on Streamlit Cloud:
+
 The project is deployed here:
+
 **👉 Live Streamlit App:**  
 🔗 [![Open in Streamlit](https://recommendation-system-project-c8cgulvvsynvm77sfiyfwb.streamlit.app/)
 
@@ -196,5 +198,7 @@ The project is deployed here:
 ---
 
 👤 Author
+
 Developed as part of a recommender system + anomaly detection project.
+
 Juliet Fafali Kukuia – Data Analyst @ getINNOtized
