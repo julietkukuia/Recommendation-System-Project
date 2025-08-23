@@ -15,6 +15,15 @@ The system is interactive, deployed as a **Streamlit application**.
 
 ---
 
+## 📅 Daily Progress Logs
+To follow the development journey of this project, check out the daily updates:
+
+- [Day 1 - Data Exploration & Setup](daily_logs/day1.md)
+- [Day 2 - Data Cleaning & Preprocessing](daily_logs/Day2.md)
+- [Day 3 – Ranking Model, Anomaly Filtering, and Streamlit Deployment](daily_logs/Day3.md)
+
+---
+
 ## 📊 Data & Preprocessing  
 
 ### **Data Sources**
@@ -97,30 +106,40 @@ The app has **two main tabs**:
 
 ## 📂 Repository Structure  
 
+```
 recsys_items/
-│── streamlit_app.py # Main Streamlit app
-│── requirements.txt # Dependencies
-│── sample_events.parquet # Demo dataset
-│── best_candidate_ranker.pkl # Logistic regression model (Task 1)
-│── inference_metadata.json # Feature metadata (Task 1)
-│── svd_item_factors.parquet # Item embeddings
+│── streamlit_app.py               # Main Streamlit app
+│── requirements.txt               # Dependencies
+│── sample_events.parquet          # Small demo dataset
+│── best_candidate_ranker.pkl      # Logistic regression model (Task 1)
+│── inference_metadata.json        # Feature metadata (Task 1)
+│── svd_item_factors.parquet       # Item embeddings
 │── svd_user_factors_part*.parquet # Sharded user embeddings
 │
 recsys_artifacts/ (Task 2)
-│── task2_isolation_forest.joblib # Trained anomaly model
-│── task2_user_features.parquet # User features
-│── task2_flagged_users.csv # Flagged users
-│── task2_operating_point.json # Threshold config
+│── task2_isolation_forest.joblib  # Trained anomaly model
+│── task2_user_features.parquet    # User features
+│── task2_flagged_users.csv        # Pre-flagged anomalies
+│── task2_operating_point.json     # Threshold config
+```
 
+## 🚀 How to Run  
 
----
+1. Clone the repository  
+   ```bash
+   git clone https://github.com/julietkukuia/Recommendation-System-Project.git
+   cd Recommendation-System-Project/recsys_items
+   ```
 
-## 📅 Daily Progress Logs
-To follow the development journey of this project, check out the daily updates:
+2. Install dependencies  
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-- [Day 1 - Data Exploration & Setup](daily_logs/day1.md)
-- [Day 2 - Data Cleaning & Preprocessing](daily_logs/Day2.md)
-- [Day 3 – Ranking Model, Anomaly Filtering, and Streamlit Deployment](daily_logs/Day3.md)
+3. Launch Streamlit app  
+   ```bash
+   streamlit run streamlit_app.py
+   ```
 
 ---
 
