@@ -1,0 +1,63 @@
+{
+  "feature_cols": [
+    "events",
+    "view",
+    "addtocart",
+    "transaction",
+    "uniq_items",
+    "uniq_cats",
+    "cat_entropy",
+    "events_per_active_day",
+    "add_to_view_rate",
+    "txn_to_cart_rate",
+    "night_share",
+    "p95_gap_s",
+    "short_gap_share",
+    "n_sessions",
+    "sessions_per_day",
+    "uniq_item_ratio"
+  ],
+  "chosen_contamination": 0.05,
+  "proxy_eval": [
+    {
+      "contamination": 0.05,
+      "precision": 0.31164209456024405,
+      "recall": 0.7490224828934506,
+      "f1": 0.4401522223020033,
+      "agreement": 0.960362913299365,
+      "heuristic_lift": 14.981188814787759
+    },
+    {
+      "contamination": 0.1,
+      "precision": 0.209448738291447,
+      "recall": 1.0,
+      "f1": 0.3463540564560498,
+      "agreement": 0.9214832879195449,
+      "heuristic_lift": 10.06857274754094
+    },
+    {
+      "contamination": 0.2,
+      "precision": 0.10481672442247243,
+      "recall": 1.0,
+      "f1": 0.1897449995197419,
+      "agreement": 0.8223393717210566,
+      "heuristic_lift": 5.038726079924817
+    },
+    {
+      "contamination": 0.3,
+      "precision": 0.07417151320866111,
+      "recall": 1.0,
+      "f1": 0.1380999445556011,
+      "agreement": 0.7403410972513522,
+      "heuristic_lift": 3.565556370172275
+    },
+    {
+      "contamination": 0.4,
+      "precision": 0.06314773050442789,
+      "recall": 1.0,
+      "f1": 0.11879389607400358,
+      "agreement": 0.6913806275817593,
+      "heuristic_lift": 3.035623564244957
+    }
+  ]
+}
