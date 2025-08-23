@@ -1,41 +1,116 @@
-# Personalised Recommendation System 🔍
+# 🧠 Hybrid Category Recommender with Anomaly Detection  
 
-## 📌 Project Overview
-This project develops a personalised recommendation system using real-world e-commerce behaviour data.  
-The system leverages historical user interactions, item properties, and category hierarchy to provide relevant, timely suggestions — addressing scenarios like:
-
+> **Live Demo:** [Streamlit App](https://recommendation-system-project-c8cgulvvsynvm77sfiyfwb.streamlit.app/)  
 
 ---
 
-## 🎯 Objective
-- Improve user engagement through tailored recommendations  
-- Increase click-through and conversion rates  
-- Demonstrate the use of machine learning in real-world datasets  
+## 📌 Project Overview  
+
+This project implements a **hybrid recommendation system** enhanced with **anomaly detection**.  
+It combines:  
+- **Task 1 — Recommendation System**: Suggests the most relevant product categories to users using both baseline heuristics and machine learning (SVD embeddings + logistic regression).  
+- **Task 2 — Anomaly Detection**: Identifies abnormal or fraudulent users with an **Isolation Forest model** trained on engineered user behaviour features.  
+
+The system is interactive, deployed as a **Streamlit application**.  
 
 ---
-📂 Dataset Description
 
-The dataset (from a real-world e-commerce site) contains:
-- events.csv – user behaviour logs over 4.5 months
-     - Columns: timestamp, visitorid, event (view, addtocart, transaction), itemid, transactionid
-- item_properties_part1.csv & item_properties_part2.csv – historical changes to item attributes
-     - Columns: timestamp, itemid, property, value
-     - Includes properties like categoryid, available, numeric and hashed features.
-- category_tree.csv – category hierarchy
-     - Columns: categoryid, parentid
-     - Used to group categories into higher-level clusters and compute category depth.
+## 📊 Data & Preprocessing  
+
+### **Data Sources**
+- **Events data**:  
+  Columns include `timestamp`, `visitorid`, `event`, `itemid`, `categoryid_final`.  
+- **Derived features**:  
+  - Session-level: recency, frequency, last-gap times.  
+  - User-level: aggregate counts, entropy, ratios for anomaly detection.  
+
+### **Preprocessing Steps**
+1. Normalized timestamps into integer milliseconds.  
+2. Standardized column types (`visitorid`, `itemid`, `categoryid_final`).  
+3. Dropped rows with missing category IDs.  
+4. Built user features table (`task2_user_features.parquet`).  
+5. Sharded large files (like user embeddings) into compressed `.parquet` parts to fit GitHub storage limits.  
 
 ---
-## 📂 Project Structure
 
-| Folder/File          | Description |
-|----------------------|-------------|
-| `data/`              | Raw and processed datasets |
-| `notebooks/`         | Jupyter notebooks for analysis and model building |
-| `scripts/`           | Python scripts for preprocessing and model training |
-| `daily_logs/`        | Daily work updates and progress reports |
-| `README.md`          | Main project documentation |
-| `requirements.txt`   | List of project dependencies |
+## ⚙️ System Architecture  
+
+### **Task 1 — Hybrid Recommender**
+- **Baseline**: Rule-based scoring with frequency and recency.  
+- **Hybrid ML model**:  
+  - Extracted SVD embeddings for users & items.  
+  - Engineered behavioural features.  
+  - Logistic regression ranking model trained to predict “add” events.  
+
+**Flow**:  
+Events → Candidate generation → Feature engineering → Model scoring → Top-K categories  
+
+### **Task 2 — Anomaly Detection**
+- **Algorithm**: Isolation Forest  
+- **Input**: 16-dimensional per-user feature vector.  
+- **Output**:  
+  - `anom_score`: anomaly likelihood.  
+  - Flagged users list (top quantile by score).  
+
+**Flow**:  
+User features → Isolation Forest → Flagged user IDs  
+
+---
+
+## 🖥️ Streamlit Application  
+
+The app has **two main tabs**:  
+
+### 🔹 Recommendations  
+- Upload an events dataset or use the provided sample (`sample_events.parquet`).  
+- Pick a user from top active users or enter a user ID manually.  
+- Configure parameters:  
+  - **Top-K recommendations**  
+  - **Lookback hours**  
+  - **Max recent views**  
+- Choose whether to **exclude anomalous users**.  
+- Get Top-K recommended categories.  
+
+### 🔹 Anomaly Audit  
+- Loads pre-engineered user features (`task2_user_features.parquet`).  
+- Runs the trained **Isolation Forest** model.  
+- Displays:  
+  - Number of flagged users.  
+  - Preview of flagged users.  
+- Supports **per-user anomaly scoring**.  
+- Allows exporting flagged users as CSV.  
+
+---
+
+## ✅ Evaluation  
+
+### **Recommendation System**
+- Metrics: **Coverage**, **Top-1 Accuracy**, **Top-3 Accuracy**.  
+- After cleaning (removing anomalies), ranking performance improved across all metrics.  
+
+### **Anomaly Detection**
+- Proxy labels used for evaluation.  
+- Precision/Recall tradeoff analysed.  
+- Optimal operating point: flagging ~5–10% of users balances recall and false positives.  
+
+---
+
+## 📂 Repository Structure  
+
+recsys_items/
+│── streamlit_app.py # Main Streamlit app
+│── requirements.txt # Dependencies
+│── sample_events.parquet # Demo dataset
+│── best_candidate_ranker.pkl # Logistic regression model (Task 1)
+│── inference_metadata.json # Feature metadata (Task 1)
+│── svd_item_factors.parquet # Item embeddings
+│── svd_user_factors_part*.parquet # Sharded user embeddings
+│
+recsys_artifacts/ (Task 2)
+│── task2_isolation_forest.joblib # Trained anomaly model
+│── task2_user_features.parquet # User features
+│── task2_flagged_users.csv # Flagged users
+│── task2_operating_point.json # Threshold config
 
 
 ---
@@ -59,39 +134,13 @@ To follow the development journey of this project, check out the daily updates:
 
 ---
 
-📈 Methodology – CRISP-DM Framework
-1. Business Understanding
+📈 **Methodology – CRISP-DM Framework**
+Business Understanding
 - Define the business problem: improve user engagement and conversion rates through personalised recommendations.
 - Formulate analytical questions, e.g.:
-  Which items should be recommended to each user given their history?
-  How do user preferences change over time?
-  Which categories drive the most transactions?
-
-2. Data Understanding
-- Explore each dataset: volume, structure, missing values, anomalies.
-- Profile events by type, time, user, and item.
-- Understand category hierarchy depth and distribution.
-
-3. Data Preparation
-- Chunk loading for large files to prevent memory errors.
-- Filter and merge relevant properties (e.g., categoryid) into events.
-- Implement time-aware joins so that events get the correct category at the event time.
-- Encode features for collaborative and content-based models.
-
-4. Modelling
-- Baselines: Popularity-based recommendation.
-- Collaborative filtering: ALS (Alternating Least Squares), BPR (Bayesian Personalised Ranking).
-- Content-based: Cosine similarity on item features.
-- Hybrid: Weighted blend of collaborative & content models.
-
-5. Evaluation
-- Ranking metrics: Precision@K, Recall@K, MAP, NDCG.
-- Business metrics: Item coverage, diversity, novelty.
-- Segment analysis: New vs returning users, top vs tail items.
-
-6. Deployment & Visualisation
-- Interactive dashboard to explore trends & model results.
-- Scalable batch inference pipeline for generating recommendation
+  - Which items should be recommended to each user given their history?
+  - How do user preferences change over time?
+  - Which categories drive the most transactions?
 
 ---
 
@@ -107,11 +156,9 @@ To follow the development journey of this project, check out the daily updates:
 ## 🚀 Live Demo
 
 Try the deployed app on Streamlit Cloud:
-
-🔗 **App URL:**  
-https://recommendation-system-project-nqxms4rszkjgmwmk8eu6bv.streamlit.app/
-
-[![Open in Streamlit](https://recommendation-system-project-c8cgulvvsynvm77sfiyfwb.streamlit.app/)
+The project is deployed here:
+**👉 Live Streamlit App:**  
+🔗 [![Open in Streamlit](https://recommendation-system-project-c8cgulvvsynvm77sfiyfwb.streamlit.app/)
 
 **What you can do in the app**
 - **Task 1 – Ranking:** Enter recent category views to get top-k category recommendations.
@@ -123,9 +170,12 @@ https://recommendation-system-project-nqxms4rszkjgmwmk8eu6bv.streamlit.app/
 - Time-aware property alignment prevents future data leakage.
 - Collaborative filtering works well but benefits from hybridising with content-based signals.
 - Efficient chunk loading & preprocessing are essential for large datasets.
+- Removing anomalies improves recommendation fairness and quality.
+- Hybrid models (embeddings + features) outperform pure rule-based baselines.
+- The system is modular: can extend to item-level recommendations, fraud detection, or real-time scoring.
 
 ---
 
 👤 Author
-
+Developed as part of a recommender system + anomaly detection project.
 Juliet Fafali Kukuia – Data Analyst @ getINNOtized
