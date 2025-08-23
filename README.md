@@ -111,7 +111,7 @@ Try the deployed app on Streamlit Cloud:
 🔗 **App URL:**  
 https://recommendation-system-project-nqxms4rszkjgmwmk8eu6bv.streamlit.app/
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://recommendation-system-project-nqxms4rszkjgmwmk8eu6bv.streamlit.app/)
+[![Open in Streamlit](https://recommendation-system-project-c8cgulvvsynvm77sfiyfwb.streamlit.app/)
 
 **What you can do in the app**
 - **Task 1 – Ranking:** Enter recent category views to get top-k category recommendations.
