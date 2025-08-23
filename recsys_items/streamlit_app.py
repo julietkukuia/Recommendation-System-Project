@@ -1,38 +1,26 @@
 # streamlit_app.py
-import json, glob, os
+import os, json, glob
+from typing import Tuple
+
 import numpy as np
 import pandas as pd
 import joblib
 import streamlit as st
 from collections import Counter
-from typing import Tuple, Optional
 
-APP_DIR = os.path.dirname(__file__)          # .../recsys_items
-REPO_ROOT = os.path.dirname(APP_DIR)         # repo root (parent of recsys_items)
+APP_DIR = os.path.dirname(__file__)  # current folder (e.g., recsys_items)
 
-# ------------------ helpers ------------------
-def file_here(name: str) -> Optional[str]:
+# ============================== small helpers ==============================
+def file_here(name: str) -> str | None:
     p = os.path.join(APP_DIR, name)
     return p if os.path.exists(p) else None
 
-def resolve_repo_path(pth: str) -> str:
-    return pth if os.path.isabs(pth) else os.path.join(APP_DIR, pth)
-
-def find_first(candidates: list[str]) -> Optional[str]:
-    for p in candidates:
-        if p and os.path.exists(p):
-            return p
-    return None
-
-# ------------------ cached artefact loaders (Task 1) ------------------
+# =================== Task 1: Recommender loaders + helpers ===================
 @st.cache_resource
 def load_model_and_meta() -> Tuple[object | None, dict | None, str]:
-    model_path = find_first([
-        os.path.join(APP_DIR, "best_candidate_ranker.pkl")
-    ])
-    meta_path = find_first([
-        os.path.join(APP_DIR, "inference_metadata.json")
-    ])
+    """Load model + metadata if present; else return (None, None, 'baseline')."""
+    model_path = file_here("best_candidate_ranker.pkl")
+    meta_path  = file_here("inference_metadata.json")
     if model_path and meta_path:
         try:
             model = joblib.load(model_path)
@@ -41,25 +29,26 @@ def load_model_and_meta() -> Tuple[object | None, dict | None, str]:
             mode = "hybrid" if meta.get("feature_set") == "hybrid_svd" else "baseline_model"
             return model, meta, mode
         except Exception as e:
-            st.warning(f"Could not load model/metadata, falling back to baseline. Details: {e}")
+            st.warning(f"Could not load model/metadata; using Baseline. Details: {e}")
     return None, None, "baseline"
 
 @st.cache_data
 def load_embeddings():
+    """Load SVD embeddings (or shards) if present; else return empty DFs."""
     u_path = file_here("svd_user_factors.parquet")
     v_path = file_here("svd_item_factors.parquet")
 
-    if not (u_path and v_path):
-        # try user shards + single item factors
-        u_shards = sorted(glob.glob(os.path.join(APP_DIR, "svd_user_factors_part*.parquet")))
-        if u_shards and file_here("svd_item_factors.parquet"):
-            U = pd.concat([pd.read_parquet(p) for p in u_shards], ignore_index=True)
-            V = pd.read_parquet(file_here("svd_item_factors.parquet"))
-        else:
-            return pd.DataFrame(), pd.DataFrame()
-    else:
+    if u_path and v_path:
         U = pd.read_parquet(u_path)
         V = pd.read_parquet(v_path)
+    else:
+        # fallback to user shards if present
+        u_shards = sorted(glob.glob(os.path.join(APP_DIR, "svd_user_factors_part*.parquet")))
+        if u_shards and v_path:
+            U = pd.concat([pd.read_parquet(p) for p in u_shards], ignore_index=True)
+            V = pd.read_parquet(v_path)
+        else:
+            return pd.DataFrame(), pd.DataFrame()
 
     if "visitorid" in U: U["visitorid"] = U["visitorid"].astype("int64")
     if "candidate_cat" in V: V["candidate_cat"] = V["candidate_cat"].astype("int64")
@@ -67,102 +56,31 @@ def load_embeddings():
 
 @st.cache_data
 def try_load_events(uploaded, default_path: str) -> pd.DataFrame:
-    # 1) Uploaded
+    # uploaded CSV/Parquet takes priority
     if uploaded is not None:
         try:
-            uploaded.seek(0)
             if uploaded.name.lower().endswith(".parquet"):
                 return pd.read_parquet(uploaded)
             return pd.read_csv(uploaded)
         except Exception as e:
             st.error(f"Could not read uploaded file: {e}")
 
-    # 2) Repo file (relative to app dir)
+    # repo file (CSV or Parquet)
     try:
-        abs_path = resolve_repo_path(default_path)
-        if abs_path.lower().endswith(".parquet"):
-            return pd.read_parquet(abs_path)
-        return pd.read_csv(abs_path)
+        path = os.path.join(APP_DIR, default_path)
+        if default_path.lower().endswith(".parquet"):
+            return pd.read_parquet(path)
+        return pd.read_csv(path)
     except Exception:
         pass
 
-    # 3) Fallback shards
+    # optional fallback shards (big local datasets)
     shards = sorted(glob.glob(os.path.join(APP_DIR, "events_enriched_part*.parquet")))
     if shards:
         return pd.concat([pd.read_parquet(p) for p in shards], ignore_index=True)
 
     return pd.DataFrame()
 
-# ------------------ Task 2: Anomaly artifacts (optional) ------------------
-@st.cache_resource
-def load_anomaly_assets():
-    """
-    Returns dict with any of:
-      flagged_df: DataFrame of flagged users (must include a user id column)
-      flagged_set: set of user ids
-      user_feats: DataFrame of task2 user features (optional)
-      iso_model: isolation forest model (optional)
-      op: dict with operating point (e.g., threshold or top-q) (optional)
-    If nothing is found, returns minimal dict.
-    """
-    # Candidate locations: in app dir, in repo root, or in 'recsys_artifacts/'
-    candidates = lambda name: [
-        os.path.join(APP_DIR, name),
-        os.path.join(REPO_ROOT, name),
-        os.path.join(APP_DIR, "recsys_artifacts", name),
-        os.path.join(REPO_ROOT, "recsys_artifacts", name),
-    ]
-
-    flagged_path = find_first(candidates("task2_flagged_users.csv"))
-    feats_path   = find_first(candidates("task2_user_features.parquet"))
-    model_path   = find_first(candidates("task2_isolation_forest.joblib"))
-    op_path      = find_first(candidates("task2_operating_point.json"))
-
-    out = {
-        "flagged_df": pd.DataFrame(),
-        "flagged_set": set(),
-        "user_feats": pd.DataFrame(),
-        "iso_model": None,
-        "op": {},
-    }
-
-    try:
-        if flagged_path:
-            fdf = pd.read_csv(flagged_path)
-            # detect id col (visitorid, user_id, etc.)
-            id_col = None
-            for c in fdf.columns:
-                if "visitor" in c.lower() or c.lower() in {"user","userid","user_id"}:
-                    id_col = c; break
-            if id_col is not None:
-                fdf[id_col] = fdf[id_col].astype("int64")
-                out["flagged_df"] = fdf
-                out["flagged_set"] = set(fdf[id_col].tolist())
-    except Exception as e:
-        st.warning(f"Could not read task2_flagged_users.csv: {e}")
-
-    try:
-        if feats_path:
-            out["user_feats"] = pd.read_parquet(feats_path)
-    except Exception as e:
-        st.warning(f"Could not read task2_user_features.parquet: {e}")
-
-    try:
-        if model_path:
-            out["iso_model"] = joblib.load(model_path)
-    except Exception as e:
-        st.warning(f"Could not load task2_isolation_forest.joblib: {e}")
-
-    try:
-        if op_path:
-            with open(op_path) as f:
-                out["op"] = json.load(f)
-    except Exception as e:
-        st.warning(f"Could not read task2_operating_point.json: {e}")
-
-    return out
-
-# ------------------ utilities: active user + debug ------------------
 @st.cache_data
 def get_active_users(events: pd.DataFrame, limit: int = 500) -> pd.DataFrame:
     need = {"event","visitorid"}
@@ -198,7 +116,6 @@ def user_debug(events: pd.DataFrame, uid: int, time_window_sec: int, views_lookb
     out["t_last"] = str(t_end)
     return out
 
-# ------------------ feature engineering (Task 1) ------------------
 def build_recent_candidates(events_enriched: pd.DataFrame, user_id: int,
                             time_window_sec: int = 24*60*60, views_lookback: int = 100) -> pd.DataFrame:
     cols = ["timestamp","visitorid","event","categoryid_final"]
@@ -235,8 +152,10 @@ def build_recent_candidates(events_enriched: pd.DataFrame, user_id: int,
 
     tail_streak = 1
     for i in range(n - 2, -1, -1):
-        if cats[i] == last_cat: tail_streak += 1
-        else: break
+        if cats[i] == last_cat:
+            tail_streak += 1
+        else:
+            break
 
     rows = []
     for c, cnt in counts.items():
@@ -254,7 +173,6 @@ def build_recent_candidates(events_enriched: pd.DataFrame, user_id: int,
         })
     return pd.DataFrame(rows)
 
-# ------------------ scoring (Task 1) ------------------
 def score_candidates_baseline(candidates: pd.DataFrame, topk: int = 5, alpha: float = 0.5) -> pd.DataFrame:
     X = candidates.copy()
     X["score"] = X["cnt"] + alpha * (1.0 / (1.0 + X["last_gap_min"]))
@@ -262,7 +180,8 @@ def score_candidates_baseline(candidates: pd.DataFrame, topk: int = 5, alpha: fl
     out["rank"] = np.arange(1, len(out) + 1)
     return out
 
-def score_candidates_hybrid(candidates: pd.DataFrame, model, meta, U: pd.DataFrame, V: pd.DataFrame, topk: int = 5) -> pd.DataFrame:
+def score_candidates_hybrid(candidates: pd.DataFrame, model, meta,
+                            U: pd.DataFrame, V: pd.DataFrame, topk: int = 5) -> pd.DataFrame:
     svd_u_cols = meta["svd_user_cols"]; svd_i_cols = meta["svd_item_cols"]; hyb_features = meta["hybrid_features"]
     if U.empty or V.empty:
         return score_candidates_baseline(candidates, topk=topk)
@@ -280,17 +199,74 @@ def score_candidates_hybrid(candidates: pd.DataFrame, model, meta, U: pd.DataFra
     out["rank"] = np.arange(1, len(out) + 1)
     return out
 
-# ============================ UI ============================
-st.set_page_config(page_title="Hybrid Recommender", page_icon="🧠", layout="centered")
-st.title("🧠 Hybrid Category Recommender")
+# =================== Task 2: Anomaly (IsolationForest) ===================
+@st.cache_resource
+def load_task2_artifacts():
+    """Load IsolationForest model, user features, flagged users, and feature list."""
+    def _maybe(name): 
+        p = os.path.join(APP_DIR, name); 
+        return p if os.path.exists(p) else None
 
-model, META, mode = load_model_and_meta()
-U, V = load_embeddings()
-ANOM = load_anomaly_assets()
+    model_path   = _maybe("task2_isolation_forest.joblib")
+    feats_path   = _maybe("task2_user_features.parquet")
+    flagged_path = _maybe("task2_flagged_users.csv")
+    cfg_path     = _maybe("task2_config.json")
 
-tabs = st.tabs(["Recommendations", "Anomaly audit"])
+    model   = joblib.load(model_path) if model_path else None
+    feats   = pd.read_parquet(feats_path) if feats_path else pd.DataFrame()
+    flagged = pd.read_csv(flagged_path) if flagged_path else pd.DataFrame()
+    cfg     = json.load(open(cfg_path)) if cfg_path else {}
 
-with tabs[0]:
+    # Decide feature list
+    feature_cols = cfg.get("feature_cols")
+    if not feature_cols and not feats.empty:
+        drop_cols = {"visitorid", "anom_score", "proxy_anom"}
+        feature_cols = [c for c in feats.columns
+                        if c not in drop_cols and pd.api.types.is_numeric_dtype(feats[c])]
+        feature_cols = sorted(feature_cols)
+
+    return model, feats, flagged, cfg, feature_cols
+
+def iforest_score_user(uid: int):
+    """Return (result_dict, warning_str). Never raises on shape mismatch."""
+    model, feats, _, cfg, feature_cols = load_task2_artifacts()
+    if model is None or feats.empty or not feature_cols:
+        return None, "Artifacts missing (model/features)."
+
+    row = feats.loc[feats["visitorid"] == uid]
+    if row.empty:
+        return None, "No precomputed features for this user."
+
+    X = row[feature_cols].astype(np.float32).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    want = getattr(model, "n_features_in_", X.shape[1])
+
+    if X.shape[1] != want:
+        if len(feature_cols) >= want:
+            use_cols = feature_cols[:want]  # deterministic subset
+            X = row[use_cols].astype(np.float32).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            warn = f"Feature mismatch fixed by selecting first {want} of {len(feature_cols)} features."
+        else:
+            return None, f"Per-user scoring unavailable: only {X.shape[1]} features present, model expects {want}."
+    else:
+        warn = None
+
+    pred = int(model.predict(X)[0] == -1)          # 1 if anomalous
+    ascore = float(-model.score_samples(X)[0])     # larger => more anomalous
+    out = {"visitorid": int(uid), "flagged": pred, "anomaly_score": ascore, "n_features_used": int(X.shape[1])}
+    return out, warn
+
+# ================================ UI =================================
+st.set_page_config(page_title="Hybrid Recommender", page_icon="🧠", layout="wide")
+
+tab_rec, tab_anom = st.tabs(["Recommendations", "Anomaly audit"])
+
+# --------------------------- Recommendations ---------------------------
+with tab_rec:
+    st.title("🧠 Hybrid Category Recommender")
+
+    model, META, mode = load_model_and_meta()
+    U, V = load_embeddings()
+
     st.sidebar.header("Data source")
     uploaded = st.sidebar.file_uploader("Upload CSV/Parquet", type=["csv","parquet"])
     default_path = st.sidebar.text_input("or repo file path", value="sample_events.parquet")
@@ -323,107 +299,72 @@ with tabs[0]:
 
         user_id = int(user_id)
 
-        # Anomaly gate (optional, only if flagged list available)
-        honor_anomaly_filter = st.checkbox("Exclude flagged/anomalous users", value=True,
-                                           help="If checked and the selected user is flagged by Task 2, "
-                                                "recommendations will be blocked.")
-        is_flagged = user_id in ANOM.get("flagged_set", set())
-        if is_flagged:
+        # Optional: block recommendations for anomalous users (if artifacts exist)
+        exclude_anom = st.checkbox("Exclude flagged/anomalous users", value=True)
+        result_t2, warn_t2 = iforest_score_user(user_id)
+        if exclude_anom and result_t2 and result_t2["flagged"] == 1:
             st.warning("This user is **flagged** by the anomaly detector.")
-        else:
-            st.info("This user is not flagged by the anomaly detector.") if ANOM.get("flagged_set") else st.caption("Anomaly list not loaded.")
-
-        colA, colB, colC = st.columns(3)
-        with colA:
-            topk = st.slider("Top K", 1, 20, 5)
-        with colB:
-            time_window_hours = st.slider("Lookback hours", 1, 72, 24)
-        with colC:
-            views_lookback = st.slider("Max recent views", 10, 300, 100, step=10)
-
-        dbg = user_debug(events_enriched, user_id, time_window_hours*3600, views_lookback)
-        with st.expander("Debug current user"):
-            st.write(dbg)
-
-        btn_disabled = honor_anomaly_filter and is_flagged
-        if btn_disabled:
             st.error("Recommendations blocked by anomaly policy. Uncheck **Exclude flagged/anomalous users** to override.")
+        else:
+            colA, colB, colC = st.columns(3)
+            with colA:
+                topk = st.slider("Top K", 1, 20, 5)
+            with colB:
+                time_window_hours = st.slider("Lookback hours", 1, 72, 24)
+            with colC:
+                views_lookback = st.slider("Max recent views", 10, 300, 100, step=10)
 
-        if st.button("Recommend", disabled=btn_disabled):
-            cand = build_recent_candidates(
-                events_enriched, user_id,
-                time_window_sec=time_window_hours*3600,
-                views_lookback=views_lookback
-            )
-            if cand.empty:
-                st.warning("No candidates for this user in the selected window.")
-            else:
-                if model and META and mode.startswith("hybrid"):
-                    recs = score_candidates_hybrid(cand, model, META, U, V, topk=topk)
+            dbg = user_debug(events_enriched, user_id, time_window_hours*3600, views_lookback)
+            with st.expander("Debug current user"):
+                st.write(dbg)
+                if result_t2:
+                    st.write({"anomaly_flag": result_t2["flagged"], "anomaly_score": result_t2["anomaly_score"]})
+                elif warn_t2:
+                    st.info(warn_t2)
+
+            if st.button("Recommend"):
+                cand = build_recent_candidates(
+                    events_enriched, user_id,
+                    time_window_sec=time_window_hours*3600,
+                    views_lookback=views_lookback
+                )
+                if cand.empty:
+                    st.warning("No candidates for this user in the selected window.")
                 else:
-                    recs = score_candidates_baseline(cand, topk=topk, alpha=0.5)
-                st.subheader("Top K Categories")
-                st.dataframe(recs, use_container_width=True)
-
-with tabs[1]:
-    st.subheader("Task 2 — Anomaly audit")
-    have_any = any([not ANOM["flagged_df"].empty, not ANOM["user_feats"].empty, ANOM["iso_model"] is not None])
-    if not have_any:
-        st.info(
-            "No anomaly artifacts found. To enable this tab, add any of these files to the repo "
-            "(either in **recsys_items/**, repo root, or **recsys_artifacts/**):\n"
-            "- task2_flagged_users.csv\n- task2_user_features.parquet\n- task2_isolation_forest.joblib\n- task2_operating_point.json"
-        )
-    else:
-        # Summary cards
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Flagged users",
-                      value=f"{len(ANOM['flagged_set']):,}" if ANOM["flagged_set"] else "—")
-        with c2:
-            st.metric("User features rows",
-                      value=f"{len(ANOM['user_feats']):,}" if not ANOM["user_feats"].empty else "—")
-        with c3:
-            st.metric("Model loaded",
-                      value="Yes" if ANOM["iso_model"] is not None else "No")
-
-        # Show flagged table (capped for UI)
-        if not ANOM["flagged_df"].empty:
-            st.markdown("**Flagged users (preview)**")
-            st.dataframe(ANOM["flagged_df"].head(500), use_container_width=True)
-            csv = ANOM["flagged_df"].to_csv(index=False).encode("utf-8")
-            st.download_button("Download flagged users CSV", data=csv, file_name="task2_flagged_users.csv", mime="text/csv")
-
-        # Per-user score if we have features + model
-        if (ANOM["iso_model"] is not None) and (not ANOM["user_feats"].empty):
-            st.markdown("---")
-            st.markdown("**Score a specific user**")
-            try:
-                # detect id column in features
-                uf = ANOM["user_feats"]
-                id_col = None
-                for c in uf.columns:
-                    if "visitor" in c.lower() or c.lower() in {"user","userid","user_id"}:
-                        id_col = c; break
-                if id_col is None:
-                    st.warning("Could not detect user id column in task2_user_features.parquet.")
-                else:
-                    uid_val = st.number_input("User id", min_value=0, value=int(uf[id_col].iloc[0]), step=1)
-                    row = uf[uf[id_col] == int(uid_val)]
-                    if row.empty:
-                        st.info("User not found in features.")
+                    if model and META and mode.startswith("hybrid"):
+                        recs = score_candidates_hybrid(cand, model, META, U, V, topk=topk)
                     else:
-                        X = row.drop(columns=[id_col])
-                        # IsolationForest uses higher score -> more normal; we want anomaly score
-                        # Use decision_function (higher -> less anomalous) or score_samples (more negative -> more anomalous)
-                        model = ANOM["iso_model"]
-                        if hasattr(model, "score_samples"):
-                            s = float(model.score_samples(X)[0])
-                            st.write(f"**score_samples** (more negative = more anomalous): `{s:.4f}`")
-                        if hasattr(model, "decision_function"):
-                            d = float(model.decision_function(X)[0])
-                            st.write(f"**decision_function** (lower = more anomalous): `{d:.4f}`")
-                        if ANOM["flagged_set"]:
-                            st.write(f"Flagged? **{'Yes' if int(uid_val) in ANOM['flagged_set'] else 'No'}**")
-            except Exception as e:
-                st.warning(f"Per-user scoring unavailable: {e}")
+                        recs = score_candidates_baseline(cand, topk=topk, alpha=0.5)
+                    st.subheader("Top K Categories")
+                    st.dataframe(recs, use_container_width=True)
+
+# ------------------------------ Anomaly audit ------------------------------
+with tab_anom:
+    st.title("Task 2 — Anomaly audit")
+
+    model_t2, feats_t2, flagged_t2, cfg_t2, feat_cols_t2 = load_task2_artifacts()
+
+    c1, c2, c3 = st.columns(3)
+    with c1: st.metric("Flagged users", f"{(len(flagged_t2) if not flagged_t2.empty else 0):,}")
+    with c2: st.metric("User features rows", f"{(len(feats_t2) if not feats_t2.empty else 0):,}")
+    with c3: st.metric("Model loaded", "Yes" if model_t2 is not None else "No")
+
+    if not flagged_t2.empty:
+        st.subheader("Flagged users (preview)")
+        st.dataframe(flagged_t2.head(10), use_container_width=True)
+        st.download_button(
+            "Download flagged users CSV",
+            data=flagged_t2.to_csv(index=False).encode("utf-8"),
+            file_name="task2_flagged_users.csv",
+            mime="text/csv",
+        )
+
+    st.subheader("Score a specific user")
+    uid_default = int(feats_t2["visitorid"].iloc[0]) if not feats_t2.empty else 0
+    uid_input = st.number_input("User id", min_value=0, step=1, value=uid_default)
+    result, warn = iforest_score_user(int(uid_input))
+    if result is None:
+        st.warning(warn)
+    else:
+        if warn: st.info(warn)
+        st.json(result)
